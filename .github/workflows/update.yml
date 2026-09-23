@@ -1,0 +1,101 @@
+name: Обновление ru-данных
+
+# Каждые 20 минут берём свежий код генератора ByMykel/CSGO-API и, если вышел
+# патч CS2 (сменился manifestId) или обновились картинки, пересобираем русский
+# язык и коммитим. Ничего не изменилось - генератор выходит сам за пару секунд.
+on:
+  schedule:
+    - cron: "*/20 * * * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Пересобрать, даже если патча не было"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update-ru
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    env:
+      # Какие файлы генератора храним. Остальные (skins_not_grouped, inventory,
+      # crates…) весят сотни МБ и сайту не нужны - добавить сюда при надобности.
+      FILES: agents base_weapons keychains music_kits skins stickers
+      # Минимум записей: меньше - генератор сломался, такой результат не коммитим.
+      MIN_SKINS: 1000
+      MIN_STICKERS: 1000
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Код генератора ByMykel (без данных)
+        run: |
+          git clone --quiet --depth 1 --filter=blob:none --sparse https://github.com/ByMykel/CSGO-API gen
+          cd gen
+          git sparse-checkout set --no-cone '/*' '!/public/'
+          echo "GEN_SHA=$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"
+          # Отметки upstream (про en) нам не подходят - сверяемся со своими.
+          rm -f manifestIdUpdate.txt imagesShaUpdate.txt
+          cp ../state/*.txt . 2>/dev/null || true
+          npm install --no-audit --no-fund --silent
+
+      - name: Сборка ru
+        working-directory: gen
+        run: node update.js ${{ inputs.force && '--force' || '' }} --languages ru
+
+      - name: Проверка и копирование
+        run: |
+          if [ ! -d gen/public/api/ru ]; then
+            echo "Изменений в игре нет"
+            exit 0
+          fi
+
+          node -e '
+            const n = f => require(`./gen/public/api/ru/${f}.json`).length;
+            const skins = n("skins"), stickers = n("stickers");
+            console.log(`skins=${skins} stickers=${stickers}`);
+            if (skins < +process.env.MIN_SKINS || stickers < +process.env.MIN_STICKERS) {
+              console.error("Подозрительно мало записей - не коммитим");
+              process.exit(1);
+            }
+          '
+
+          mkdir -p public/api/ru state
+          for f in $FILES; do
+            test -s "gen/public/api/ru/$f.json" && cp "gen/public/api/ru/$f.json" public/api/ru/
+          done
+          # Отметки обновляем только после удачной сборки, иначе следующий
+          # запуск решит, что всё уже собрано.
+          cp gen/manifestIdUpdate.txt gen/imagesShaUpdate.txt state/
+
+      - name: Коммит
+        run: |
+          rm -rf gen
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A public state
+
+          if ! git diff --cached --quiet; then
+            git commit -q -m "ru: manifest $(cat state/manifestIdUpdate.txt) (ByMykel ${GEN_SHA})"
+            git push
+            exit 0
+          fi
+
+          # GitHub отключает расписание, если в репозитории 60 дней нет коммитов.
+          # Между патчами бывает и дольше, поэтому раз в ~50 дней - пустой коммит.
+          if [ $(( $(date +%s) - $(git log -1 --format=%ct) )) -gt $(( 50 * 24 * 3600 )) ]; then
+            git commit -q --allow-empty -m "keepalive"
+            git push
+          fi
