@@ -1,8 +1,5 @@
 name: Обновление ru-данных
 
-# Каждые 20 минут берём свежий код генератора ByMykel/CSGO-API и, если вышел
-# патч CS2 (сменился manifestId) или обновились картинки, пересобираем русский
-# язык и коммитим. Ничего не изменилось - генератор выходит сам за пару секунд.
 on:
   schedule:
     - cron: "*/20 * * * *"
@@ -26,10 +23,7 @@ jobs:
     timeout-minutes: 20
 
     env:
-      # Какие файлы генератора храним. Остальные (skins_not_grouped, inventory,
-      # crates…) весят сотни МБ и сайту не нужны - добавить сюда при надобности.
       FILES: agents base_weapons keychains music_kits skins stickers
-      # Минимум записей: меньше - генератор сломался, такой результат не коммитим.
       MIN_SKINS: 1000
       MIN_STICKERS: 1000
 
@@ -45,8 +39,8 @@ jobs:
           git clone --quiet --depth 1 --filter=blob:none --sparse https://github.com/ByMykel/CSGO-API gen
           cd gen
           git sparse-checkout set --no-cone '/*' '!/public/'
+          mkdir -p public
           echo "GEN_SHA=$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"
-          # Отметки upstream (про en) нам не подходят - сверяемся со своими.
           rm -f manifestIdUpdate.txt imagesShaUpdate.txt
           cp ../state/*.txt . 2>/dev/null || true
           npm install --no-audit --no-fund --silent
@@ -76,8 +70,6 @@ jobs:
           for f in $FILES; do
             test -s "gen/public/api/ru/$f.json" && cp "gen/public/api/ru/$f.json" public/api/ru/
           done
-          # Отметки обновляем только после удачной сборки, иначе следующий
-          # запуск решит, что всё уже собрано.
           cp gen/manifestIdUpdate.txt gen/imagesShaUpdate.txt state/
 
       - name: Коммит
@@ -93,8 +85,6 @@ jobs:
             exit 0
           fi
 
-          # GitHub отключает расписание, если в репозитории 60 дней нет коммитов.
-          # Между патчами бывает и дольше, поэтому раз в ~50 дней - пустой коммит.
           if [ $(( $(date +%s) - $(git log -1 --format=%ct) )) -gt $(( 50 * 24 * 3600 )) ]; then
             git commit -q --allow-empty -m "keepalive"
             git push
