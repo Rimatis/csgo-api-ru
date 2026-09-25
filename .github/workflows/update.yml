@@ -47,7 +47,18 @@ jobs:
 
       - name: Сборка ru
         working-directory: gen
-        run: node update.js ${{ inputs.force && '--force' || '' }} --languages ru
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          cat > gh-auth.mjs <<'EOF'
+          import axios from "axios";
+          axios.interceptors.request.use(c => {
+            if (c.url?.startsWith("https://api.github.com/")) c.headers.Authorization = `Bearer ${process.env.GITHUB_TOKEN}`;
+            return c;
+          });
+          EOF
+          build() { node --import ./gh-auth.mjs update.js ${{ inputs.force && '--force' || '' }} --languages ru; }
+          build || { echo "Повтор через 60 с"; sleep 60; build; }
 
       - name: Проверка и копирование
         run: |
