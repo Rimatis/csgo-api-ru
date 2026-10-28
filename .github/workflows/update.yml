@@ -51,11 +51,15 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           cat > gh-auth.mjs <<'EOF'
-          import axios from "axios";
-          axios.interceptors.request.use(c => {
-            if (c.url?.startsWith("https://api.github.com/")) c.headers.Authorization = `Bearer ${process.env.GITHUB_TOKEN}`;
-            return c;
-          });
+          const fetch0 = globalThis.fetch;
+          globalThis.fetch = (url, opts = {}) => {
+            if (String(url).startsWith("https://api.github.com/")) {
+              const headers = new Headers(opts.headers);
+              headers.set("Authorization", `Bearer ${process.env.GITHUB_TOKEN}`);
+              opts = { ...opts, headers };
+            }
+            return fetch0(url, opts);
+          };
           EOF
           build() { node --import ./gh-auth.mjs update.js ${{ inputs.force && '--force' || '' }} --languages ru; }
           build || { echo "Повтор через 60 с"; sleep 60; build; }
